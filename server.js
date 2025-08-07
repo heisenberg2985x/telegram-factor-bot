@@ -1,80 +1,70 @@
-// server.js
 const TelegramBot = require('node-telegram-bot-api');
+const express = require('express');
+const app = express();
 
-// 🔐 Inserisci il tuo token qui
 const TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
 
-// 🗃️ Mappa per tenere traccia dei giocatori in attesa di prezzo
-const waitingForPrice = new Map();
+if (!TOKEN || !CHAT_ID) {
+  console.error('TELEGRAM_TOKEN o CHAT_ID non sono definiti nelle variabili di ambiente.');
+  process.exit(1);
+}
 
-// 📩 Quando riceve un messaggio testuale
-bot.on('message', (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
+const bot = new TelegramBot(TOKEN, { polling: true });
 
-  // Se è in attesa del prezzo per un giocatore
-  if (waitingForPrice.has(chatId)) {
-    const { factor, playerId } = waitingForPrice.get(chatId);
-    const price = parseFloat(text.replace(',', '.'));
-
-    if (!isNaN(price) && factor !== 0) {
-      const ratio = price / factor;
-      bot.sendMessage(chatId, `💰 Prezzo/Factor per ID ${playerId}: ${ratio.toFixed(2)}`);
-    } else {
-      bot.sendMessage(chatId, '⚠️ Prezzo non valido. Riprova.');
-      return;
-    }
-
-    waitingForPrice.delete(chatId);
-  }
-});
-
-// 📥 Gestione delle callback dei pulsanti
-bot.on('callback_query', (callbackQuery) => {
-  const chatId = callbackQuery.message.chat.id;
-  const data = callbackQuery.data;
-
-  if (data.startsWith('insert_')) {
-    const parts = data.split('_');
-    const playerId = parts[1];
-    const factor = parseFloat(parts[2]);
-
-    waitingForPrice.set(chatId, { factor, playerId });
-
-    bot.sendMessage(chatId, `✍️ Invia il prezzo per il giocatore ID ${playerId}`);
-  }
-});
-
-// ✅ Funzione esportata per inviare messaggi dal client HTML
-const express = require('express');
-const app = express();
-const PORT = process.env.PORT || 3000;
+const waitingForPrice = {};
 
 app.use(express.json());
 
 app.post('/send-player', (req, res) => {
-  const { chatId, playerId, name, ratio, wages, value, factor } = req.body;
+  const { player_id, name, wages, value, ratio, factor } = req.body;
 
-  const text = `👤 ID: ${playerId} - ${name}\n` +
-    `Ratio: ${ratio.toFixed(3)} | Wages: ${wages} | Value: ${value}\n` +
-    `Factor: ${factor.toFixed(5)}`;
-
+  const text = `👤 ID: ${player_id} - ${name}\nRatio: ${ratio} | Wages: ${wages} | Value: ${value}\nFactor: ${factor}`;
   const opts = {
     reply_markup: {
-      inline_keyboard: [[
-        {
-          text: '💸 Inserisci prezzo',
-          callback_data: `insert_${playerId}_${factor}`
-        }
-      ]]
-    }
+      inline_keyboard: [
+        [
+          {
+            text: '💰 Inserisci prezzo',
+            callback_data: `price_${player_id}_${factor}`,
+          },
+        ],
+      ],
+    },
   };
 
-  bot.sendMessage(chatId, text, opts);
+  bot.sendMessage(CHAT_ID, text, opts);
   res.sendStatus(200);
 });
 
+bot.on('callback_query', (query) => {
+  const chatId = query.message.chat.id;
+  const [_, playerId, factor] = query.data.split('_');
+
+  waitingForPrice[chatId] = { playerId, factor };
+  bot.sendMessage(chatId, `💬 Invia ora il prezzo per il giocatore ${playerId}`);
+});
+
+bot.on('message', (msg) => {
+  const chatId = msg.chat.id;
+  const userInput = msg.text;
+
+  if (waitingForPrice[chatId]) {
+    const { playerId, factor } = waitingForPrice[chatId];
+    const price = parseFloat(userInput.replace(',', '.'));
+
+    if (!isNaN(price)) {
+      const result = price / parseFloat(factor);
+      bot.sendMessage(chatId, `📊 Prezzo/Factor per ${playerId} = ${result.toFixed(2)}`);
+    } else {
+      bot.sendMessage(chatId, `⚠️ Inserisci un numero valido.`);
+    }
+
+    delete waitingForPrice[chatId];
+  }
+});
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🤖 Bot server running on port ${PORT}`);
+  console.log(`Server avviato su porta ${PORT}`);
 });
